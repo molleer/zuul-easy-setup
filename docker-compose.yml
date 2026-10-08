@@ -1,0 +1,25 @@
+version: "3"
+
+services:
+  gerrit:
+    image: docker.io/gerritcodereview/gerrit
+    ports:
+      - "29418:29418"
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080"]
+      interval: 1s
+      timeout: 30s
+      retries: 100
+
+  setup:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      GERRIT_HOST: gerrit
+    volumes:
+      - ./.ssh/:/.ssh/
+    depends_on:
+      gerrit:
+        condition: service_healthy
