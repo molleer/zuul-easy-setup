@@ -1,5 +1,3 @@
-version: "3"
-
 services:
   gerrit:
     image: docker.io/gerritcodereview/gerrit
@@ -11,6 +9,10 @@ services:
       interval: 1s
       timeout: 30s
       retries: 100
+    environment:
+      - CANONICAL_WEB_URL=http://localhost:8080/
+    networks:
+      - zuul
 
   setup:
     build:
@@ -19,7 +21,162 @@ services:
     environment:
       GERRIT_HOST: gerrit
     volumes:
-      - ./.ssh/:/.ssh/
+      - sshkey:/.ssh:z
+      - nodessh:/nodepool:z
+      - certs:/certs:z
     depends_on:
       gerrit:
         condition: service_healthy
+    networks:
+      - zuul
+
+  zk:
+    # This is a mirror of:
+    # image: docker.io/zookeeper
+    image: quay.io/opendevmirror/zookeeper
+    hostname: examples_zk_1.examples_default
+    volumes:
+      - "certs:/var/certs:z"
+      - "./zoo.cfg:/conf/zoo.cfg:z"
+      - "zk-data:/data"
+      - "zk-datalog:/datalog"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+    networks:
+      - zuul
+
+  mysql:
+    # This is a mirror of:
+    # image: docker.io/mariadb
+    image: quay.io/opendevmirror/mariadb
+    environment:
+      MYSQL_ROOT_PASSWORD: rootpassword
+      MYSQL_DATABASE: zuul
+      MYSQL_USER: zuul
+      MYSQL_PASSWORD: secret
+      # Work around slow db startup when writing TZINFO data.
+      MYSQL_INITDB_SKIP_TZINFO: 1
+    volumes:
+      - "lib-mysql:/var/lib/mysql"
+    networks:
+      - zuul
+
+  scheduler:
+    environment:
+      - http_proxy
+      - https_proxy
+      - no_proxy=${no_proxy},gerrit
+      - ZUUL_MYSQL_PASSWORD=secret
+    command: zuul-scheduler -f
+    image: quay.io/zuul-ci/zuul-scheduler
+    volumes:
+      - ./etc_zuul/:/etc/zuul/:z"
+      - sshkey:/var/ssh:z
+      - certs:/var/certs:z
+      - lib-zuul-scheduler:/var/lib/zuul
+    networks:
+      - zuul
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  web:
+    command: zuul-web -f
+    ports:
+      - "9000:9000"
+    image: quay.io/zuul-ci/zuul-web
+    environment:
+      ZUUL_MYSQL_PASSWORD: secret
+    volumes:
+      - ./etc_zuul/:/etc/zuul/:z
+      - certs:/var/certs:z
+      - lib-zuul-web:/var/lib/zuul
+    networks:
+      - zuul
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  executor:
+    privileged: true
+    environment:
+      - http_proxy
+      - https_proxy
+      - no_proxy=${no_proxy},gerrit,scheduler
+      - ZUUL_MYSQL_PASSWORD=secret
+    image: quay.io/zuul-ci/zuul-executor
+    volumes:
+      - ./etc_zuul/:/etc/zuul/:z
+      - sshkey:/var/ssh:z
+      - logs:/srv/static/logs:z
+      - certs:/var/certs:z
+      - lib-zuul-executor:/var/lib/zuul:z
+    command: zuul-executor -f
+    networks:
+      - zuul
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  node:
+    build:
+      dockerfile: node.Dockerfile
+      context: ./
+      args:
+        http_proxy: "${http_proxy}"
+        https_proxy: "${http_proxy}"
+        no_proxy: "${no_proxy},gerrit"
+    volumes:
+      - "nodessh:/root/.ssh:z"
+    networks:
+      - zuul
+
+  launcher:
+    image: quay.io/zuul-ci/zuul-launcher
+    volumes:
+      - ./etc_zuul/:/etc/zuul/:z"
+      - "certs:/var/certs:z"
+      - "lib-zuul-launcher:/var/lib/zuul"
+    command: zuul-launcher -f
+    networks:
+      - zuul
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  logs:
+    build:
+      dockerfile: logs.Dockerfile
+      context: ./
+      args:
+        http_proxy: "${http_proxy}"
+        https_proxy: "${http_proxy}"
+        no_proxy: "${no_proxy}"
+    ports:
+      - "8000:80"
+    volumes:
+      - "logs:/usr/local/apache2/htdocs:z"
+    networks:
+      - zuul
+
+volumes:
+  sshkey:
+  nodessh:
+  logs:
+  certs:
+  lib-zuul-scheduler:
+  lib-zuul-web:
+  lib-zuul-executor:
+  lib-zuul-launcher:
+  zk-data:
+  zk-datalog:
+  lib-mysql:
+  gerrit-etc:
+  gerrit-db:
+  gerrit-git:
+  gerrit-index:
+  gerrit-cache:
+
+networks:
+  zuul:
