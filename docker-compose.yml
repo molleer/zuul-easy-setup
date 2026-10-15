@@ -20,8 +20,9 @@ services:
       dockerfile: Dockerfile
     environment:
       GERRIT_HOST: gerrit
+      CERT_DIRECTORY: /certs/
     volumes:
-      - sshkey:/.ssh:z
+      - sshkey:/ssh:z
       - nodessh:/nodepool:z
       - certs:/certs:z
     depends_on:
