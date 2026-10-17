@@ -1,0 +1,32 @@
+- image:
+    name: ubuntu-jammy
+    type: cloud
+
+- flavor:
+    name: static
+
+- label:
+    name: ubuntu-jammy
+    image: ubuntu-jammy
+    flavor: static
+
+- section:
+    name: static
+    connection: static
+    flavors:
+      - name: static
+
+- provider:
+    name: static-main
+    section: static
+    nodes:
+      - name: node
+        label: ubuntu-jammy
+        connection-port: 22
+        host-key: "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOgHJYejINIKzUiuSJ2MN8uPc+dfFrZ9JH1hLWS8gI+g"
+    labels:
+      - name: ubuntu-jammy
+    images:
+      - name: ubuntu-jammy
+        python-path: /usr/bin/python3
+        username: root
