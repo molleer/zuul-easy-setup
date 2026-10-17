@@ -4,13 +4,14 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from tempfile import TemporaryDirectory
 
 import paramiko
 import paramiko.pkey
 import requests
-from tempfile import TemporaryDirectory
 
 ADMIN = "admin"
+ADMIN_TOKEN = "secret"
 SSH_PORT = "29418"
 GERRIT_HOST = os.environ.get("GERRIT_HOST", "localhost")
 GERRIT_PATH = f"http://{GERRIT_HOST}:8080"
@@ -65,20 +66,22 @@ def create_pem(output: Path) -> None:
         key.write_private_key(f, file_format=paramiko.pkey.PEM)
 
 
-def add_key(key: Path, user: str, token: str | None = None, admin_key: Path | None = None) -> None:
-    if not token:
-        if not admin_key:
-            raise ValueError("Admin key not provided")
-
-        token = gerrit_command(["set-account", user, "--generate-http-password"], admin_key)
-        token = token.split(" ")[-1].strip()
-
+def add_key(key: Path, user: str, token: str) -> None:
     response = requests.post(
         f"{GERRIT_PATH}/a/accounts/self/sshkeys",
         auth=(user, token),
         data=key.read_text(),
     )
     response.raise_for_status()
+
+
+def get_groups(user: str, token: str) -> dict[str, str]:
+    response = requests.get(
+        f"{GERRIT_PATH}/a/groups",
+        auth=(user, token),
+    )
+    response.raise_for_status()
+    return {name: info["id"] for name, info in json.loads(response.content.decode().splitlines()[-1]).items()}
 
 
 def set_password(admin_key: Path, user: str, password: str) -> None:
@@ -205,20 +208,22 @@ def init_repo(files: Path, admin_key=Path) -> None:
 
 if __name__ == "__main__":
     private, public = generate_ssh_key("admin")
-    add_key(public, ADMIN, "secret")
+    add_key(public, ADMIN, ADMIN_TOKEN)
 
     for repo in REPOS.iterdir():
         init_repo(repo, private)
 
     try:
         gerrit_command(["create-account", "zuul"], private)
-        set_password(private, "zuul", ZUUL_PASSWORD)
-        # TODO: Add zuul user to Service Users
     except subprocess.CalledProcessError:
         pass
 
+    groups = get_groups(ADMIN, ADMIN_TOKEN)
+    gerrit_command(["set-members", groups["Service Users"], "--add", "zuul"], private)
+    set_password(private, "zuul", ZUUL_PASSWORD)
+
     z_private, z_public = generate_ssh_key("zuul")
-    add_key(z_public, "zuul", admin_key=private)
+    add_key(z_public, "zuul", ZUUL_PASSWORD)
 
     _, n_public = generate_ssh_key("nodepool", Path("nodepool"))
     add_known_hosts(n_public)
