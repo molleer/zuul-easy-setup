@@ -14,7 +14,7 @@ docker compose up -d
 
 And that's it!
 
-**WARNING**: Do not use the configuration in production as is. Password are and
+**WARNING**: Do not use the configuration in production as is. Passwords and
 other configurations my be insecure and should be updated accordingly before
 being used in production.
 
