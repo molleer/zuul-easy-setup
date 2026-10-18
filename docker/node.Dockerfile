@@ -23,7 +23,9 @@ RUN set -e ; \
     ;
 
 COPY --chown=root:root ./ssh_host_ed25519_key /etc/ssh/ssh_host_ed25519_key
+COPY --chown=root:root ./ssh_host_ed25519_key.pub /etc/ssh/ssh_host_ed25519_key.pub
 RUN chmod 0600 /etc/ssh/ssh_host_ed25519_key
+RUN chmod 0644 /etc/ssh/ssh_host_ed25519_key.pub
 
 EXPOSE 22
 

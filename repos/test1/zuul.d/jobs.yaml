@@ -1,0 +1,3 @@
+- job:
+      name: hello
+      run: playbooks/hello.yml

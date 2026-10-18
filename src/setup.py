@@ -23,6 +23,7 @@ CERT_DIRECTORY = Path(os.environ.get("CERT_DIRECTORY", "./certs"))
 ZUUL_PASSWORD = os.environ.get("ZUUL_PASSWORD", "secret")
 REPOS = Path(__file__).parent / "repos"
 META_CONFIG = Path(__file__).parent / "meta_config"
+NODE_POOL_SSH = Path("/nodepool")
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -124,20 +125,25 @@ def create_repo(repo_name: str, key: Path) -> None:
     return True
 
 
-def add_known_hosts(key: Path, directory: Path = KEY_PATH) -> None:
-    directory.mkdir(exist_ok=True)
-    known_hosts = directory / "known_hosts"
+def _append_to_file(input_file: Path, output_file: Path) -> None:
+    output_file.parent.mkdir(exist_ok=True, parents=True)
+    output_file.touch(exist_ok=True)
 
-    if not known_hosts.exists():
-        known_hosts.touch()
-
-    hosts = known_hosts.read_text()
-    key_content = key.read_text()
-    if key_content in hosts:
-        logger.info(f"{key.name} is already in {known_hosts.as_posix()}")
+    input_content = input_file.read_text()
+    output_content = output_file.read_text()
+    if input_content in output_content:
+        logger.info(f"{input_file.as_posix()} is already in {output_file.as_posix()}")
         return
 
-    known_hosts.write_text(f"{hosts}\n{key_content}")
+    output_file.write_text(f"{output_content}\n{input_content}")
+
+
+def add_known_hosts(key: Path, directory: Path = KEY_PATH) -> None:
+    _append_to_file(key, directory / "known_hosts")
+
+
+def add_authorized_keys(key: Path, directory: Path = KEY_PATH) -> None:
+    _append_to_file(key, directory / "authorized_keys")
 
 
 def generate_zk_certs(output: Path, name: str) -> None:
@@ -286,7 +292,8 @@ if __name__ == "__main__":
     z_private, z_public = generate_ssh_key("zuul")
     add_key(z_public, "zuul", ZUUL_PASSWORD)
 
-    _, n_public = generate_ssh_key("nodepool", Path("nodepool"))
-    add_known_hosts(n_public)
+    _, n_public = generate_ssh_key("nodepool")
+    add_known_hosts(n_public, NODE_POOL_SSH)
+    add_authorized_keys(n_public, NODE_POOL_SSH)
 
     generate_zk_certs(CERT_DIRECTORY, "examples_zk_1.examples_default")

@@ -2,7 +2,7 @@
     name: test1
     check:
       jobs:
-        - noop
+        - hello
     gate:
       jobs:
         - noop
