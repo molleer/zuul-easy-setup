@@ -5,10 +5,12 @@ import shutil
 import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from time import sleep
 
 import paramiko
 import paramiko.pkey
 import requests
+from jinja2 import Template
 
 ADMIN = "admin"
 ADMIN_TOKEN = "secret"
@@ -20,8 +22,7 @@ ZK_CA_SCRIPT = Path(__file__).parent / "generate-zk-ca.sh"
 CERT_DIRECTORY = Path(os.environ.get("CERT_DIRECTORY", "./certs"))
 ZUUL_PASSWORD = os.environ.get("ZUUL_PASSWORD", "secret")
 REPOS = Path(__file__).parent / "repos"
-
-COMMIT_COUNT = 0
+META_CONFIG = Path(__file__).parent / "meta_config"
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -156,37 +157,74 @@ def generate_zk_certs(output: Path, name: str) -> None:
     subprocess.run(["chmod", "-R", "a+rX", output.as_posix()], check=True)
 
 
-def init_repo(files: Path, admin_key=Path) -> None:
-    global COMMIT_COUNT
+def _clone_repo(repo: str, cwd: Path, admin_key: Path) -> None:
+    repo_dir = cwd / repo
 
+    auth_git_command(
+        [
+            "clone",
+            f"ssh://{ADMIN}@{GERRIT_HOST}:{SSH_PORT}/{repo}",
+        ],
+        admin_key,
+        cwd=cwd,
+    )
+    (repo_dir / ".git/hooks").mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        [
+            "curl",
+            "-fLo",
+            f"{repo_dir.as_posix()}/.git/hooks/commit-msg",
+            f"http://{GERRIT_HOST}:8080/tools/hooks/commit-msg",
+        ],
+        cwd=repo_dir.as_posix(),
+    )
+    (repo_dir / ".git/hooks/commit-msg").chmod(0o755)
+
+
+def git_command(cmd: list[str], cwd: Path | None = None) -> str:
+    p = subprocess.run(
+        ["git", *cmd],
+        cwd=cwd.as_posix() if cwd else None,
+        stdout=subprocess.PIPE,
+        check=True,
+    )
+    return p.stdout.decode()
+
+
+def auth_git_command(cmd: list[str], admin_key: Path, cwd: Path | None = None) -> str:
+    return git_command(
+        ["-c", f"core.sshCommand=ssh -i {admin_key.as_posix()} -o StrictHostKeyChecking=no", *cmd],
+        cwd=cwd,
+    )
+
+
+def _git_submit(
+    cwd: Path,
+    admin_key: Path,
+    msg: str = "Add initial files",
+    branch: str = "master",
+) -> None:
+    git_command(["config", "user.email", f"{ADMIN}@example.com"], cwd=cwd)
+    git_command(["config", "user.name", ADMIN], cwd=cwd)
+
+    git_command(["add", "-A"], cwd=cwd)
+    git_command(["commit", "-m", msg], cwd=cwd)
+    auth_git_command(["push", "origin", f"HEAD:refs/for/{branch}"], admin_key, cwd=cwd)
+    sha1 = git_command(["rev-parse", "HEAD"], cwd=cwd).strip()
+
+    gerrit_command(["review", sha1, "-l", "Code-Review=2", "-l", "Verified=2", "--submit"], admin_key)
+
+
+def init_repo(files: Path, admin_key: Path) -> bool:
     if not create_repo(files.name, admin_key):
-        return
+        return False
+
+    git_command(["config", "--global", "user.email", f"{ADMIN}@example.com"])
+    git_command(["config", "--global", "user.name", ADMIN])
 
     with TemporaryDirectory() as temporary_directory:
         repo_dir = Path(temporary_directory) / files.name
-
-        subprocess.run(
-            [
-                "git",
-                "clone",
-                "-c",
-                f"core.sshCommand=ssh -i {admin_key.as_posix()} -o StrictHostKeyChecking=no",
-                f"ssh://{ADMIN}@{GERRIT_HOST}:{SSH_PORT}/{files.name}",
-            ],
-            cwd=temporary_directory,
-            check=True,
-        )
-        (repo_dir / ".git/hooks").mkdir(parents=True, exist_ok=True)
-        subprocess.run(
-            [
-                "curl",
-                "-fLo",
-                f"{repo_dir.as_posix()}/.git/hooks/commit-msg",
-                f"http://{GERRIT_HOST}:8080/tools/hooks/commit-msg",
-            ],
-            cwd=repo_dir.as_posix(),
-        )
-        (repo_dir / ".git/hooks/commit-msg").chmod(0o755)
+        _clone_repo(files.name, Path(temporary_directory), admin_key)
 
         for file in files.glob("**/*"):
             if file.is_dir():
@@ -196,14 +234,36 @@ def init_repo(files: Path, admin_key=Path) -> None:
             dst.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy(file.as_posix(), dst)
 
-        subprocess.run(["git", "config", "--global", "user.email", f"{ADMIN}@example.com"], check=True)
-        subprocess.run(["git", "config", "--global", "user.name", ADMIN], check=True)
-        subprocess.run(["git", "add", "-A"], cwd=repo_dir.as_posix(), check=True)
-        subprocess.run(["git", "commit", "-m", "Add initial files"], cwd=repo_dir.as_posix(), check=True)
-        subprocess.run(["git", "push", "origin", "HEAD:refs/for/master"], cwd=repo_dir.as_posix(), check=True)
-        COMMIT_COUNT += 1
+        _git_submit(repo_dir, admin_key)
 
-        gerrit_command(["review", f"{COMMIT_COUNT},1", "-l", "Code-Review=2", "--submit"], admin_key)
+    return True
+
+
+def init_meta_config(repo: str, meta_conifig: Path, admin_key: Path) -> None:
+    groups = get_groups(ADMIN, ADMIN_TOKEN)
+    context = {f"{name.lower().replace(' ', '_')}_id": group_id for name, group_id in groups.items()}
+
+    with TemporaryDirectory() as temporary_directory:
+        repo_dir = Path(temporary_directory) / repo
+
+        _clone_repo(repo, repo_dir.parent, admin_key)
+        auth_git_command(["fetch", "origin", "refs/meta/config"], admin_key, cwd=repo_dir)
+        git_command(["checkout", "FETCH_HEAD"], cwd=repo_dir)
+
+        for file in meta_conifig.glob("**/*"):
+            dest = repo_dir / file.relative_to(meta_conifig).parent / file.name.removesuffix(".j2")
+
+            if file.is_dir():
+                continue
+            dest.parent.mkdir(exist_ok=True, parents=True)
+
+            if file.name.endswith(".j2"):
+                template = Template(file.read_text())
+                dest.write_text(template.render(**context))
+            else:
+                dest.write_text(file.read_text())
+
+        _git_submit(repo_dir, admin_key, "Add initial repo config", "refs/meta/config")
 
 
 if __name__ == "__main__":
@@ -211,7 +271,8 @@ if __name__ == "__main__":
     add_key(public, ADMIN, ADMIN_TOKEN)
 
     for repo in REPOS.iterdir():
-        init_repo(repo, private)
+        if init_repo(repo, private):
+            init_meta_config(repo.name, META_CONFIG, private)
 
     try:
         gerrit_command(["create-account", "zuul"], private)

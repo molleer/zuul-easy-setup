@@ -16,8 +16,8 @@ services:
 
   setup:
     build:
-      context: .
-      dockerfile: Dockerfile
+      dockerfile: ./docker/setup.Dockerfile
+      context: ./
     environment:
       GERRIT_HOST: gerrit
       CERT_DIRECTORY: /certs/
@@ -123,12 +123,13 @@ services:
   node:
     build:
       dockerfile: node.Dockerfile
-      context: ./
+      context: ./docker/
       args:
         http_proxy: "${http_proxy}"
         https_proxy: "${http_proxy}"
         no_proxy: "${no_proxy},gerrit"
     volumes:
+      - sshkey:/var/ssh:z
       - "nodessh:/root/.ssh:z"
     networks:
       - zuul
@@ -149,7 +150,7 @@ services:
   logs:
     build:
       dockerfile: logs.Dockerfile
-      context: ./
+      context: ./docker/
       args:
         http_proxy: "${http_proxy}"
         https_proxy: "${http_proxy}"

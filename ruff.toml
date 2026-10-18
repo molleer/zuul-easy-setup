@@ -4,4 +4,4 @@ indent-width = 4
 target-version = "py312"
 
 [lint]
-select = ["I"]
+select = ["I001"]

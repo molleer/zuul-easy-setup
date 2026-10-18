@@ -33,12 +33,17 @@
         open: True
         current-patchset: True
         approval:
-          - Workflow: 1
+          - Verified: [1, -2]
+          - Code-Review: 2
     trigger:
       gerrit:
         - event: comment-added
+          comment: (?i)^(Patch Set [0-9]+:)?( [\w\\+-]*)*(\n\n)?\s*regate
           approval:
-            - Workflow: 1
+            - Verified: -2
+        - event: comment-added
+          approval:
+            - Code-Review: 2
     start:
       gerrit:
         Verified: 0
